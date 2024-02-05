@@ -1,0 +1,182 @@
+1.
+Reasons to choose virtual over generic:
+- wanting to share implementation code in header files with users of the interface
+- wanting to hide the implementation code in the header file from users of the interface for faster compilation
+- better compilation error messages before C++20 (when concepts were introduced)
+
+
+Non reasons:
+- better code optimization opportunities for the compiler => reason: templates are resolved at compile time, and
+different instantiations of the same template can be optimized differently
+
+Probably non reason:
+- ability to selectively include functions in the API based on the types involved =>
+    - reason: virtual functions can be overridden in derived classes,
+              and the derived class can choose to not override the function,
+              effectively hiding it from the API
+    - templates can achieve this via SFINAE (Substitution Failure Is Not An Error) or concepts
+
+Example:
+
+template <typename T>
+concept IsInt = std::is_same<T, int>::value;
+
+template <typename T>
+struct Foo {
+    void foo() {
+        std::cout << "foo\n";
+    }
+
+    template <typename U = T>
+    typename std::enable_if_t<std::is_same<U, int>::value, void> bar() {
+        std::cout << "bar\n";
+    }
+
+    template <IsInt U = T>
+    void baz() {
+        std::cout << "baz\n";
+    }
+};
+
+2. Rules of thumb, points of departure
+True:
+- move constructors and operators should be noexcept (according to Scott Meyers from Effective Modern C++), also swaps
+    - reason: e.g. vector::push_back() can be more efficient if the move constructor is noexcept because:
+                - vector push_back guarantees it doesn't throw
+                - the vector can be resized in place instead of allocating a new buffer and copying the elements
+- base classes with virtuals should not be copyable
+    - reason: copy/move constructors are not generated for classes with virtual functions, or virtual base classes
+    - it does not make sense to copy a derived class to a base class
+    - reason: slicing: if a derived class is copied to a base class, the derived class's members are sliced off
+    - reason: if it is trivially copyable, the virtual table pointer will be copied, and the derived class's virtual table will be used
+- prefer making operators like == and < non-member functions (or other operators)
+    - reason: symmetry. e.g. 10 + obj does not work, but obj + 10 does
+    - reason: if the operator is a member function, the left-hand side is fixed, and the right-hand side can be implicitly converted
+    - reason: if the operator is a non-member function, both sides can be implicitly converted
+
+False:
+
+Not sure:
+- constructors should either succeed (of course), wait for a later init() call
+  (some programming languages like C/Zig does not require RAII, but C++ encourages RAII), or in a well-defined error state
+- to help support deep copying of a runtime polymorphic object, provide a virtual size_t size() const function
+- memset() your large objects to 0 bytes to avoid uninitialized memory reads
+    - reason: unless you want to default initialize everything to 0 or nullptr, it could be efficient
+    - reason: if they are 0 and the object contains pointers, it wouldn't avoid undefined behavior
+
+3. Valid IO streams
+
+inline std::ostream& operator<<(std::ostream& os, const X& x) {
+    return os << x.i << " " << x.d;
+}
+
+inline std::istream& operator>>(std::istream& os, X& x) {
+    char c;
+    // this means to
+    if (os >> x.i >> c >> x.d && c != ',') {
+        os.setstate(std::ios_base::failbit);
+    }
+    return os;
+}
+
+if (std::ifstream in{"scratch.txt"}) {
+    while (!in.eof()) {
+        std::string line;
+        std::getline(in, line);
+        std::cout << line << '\n';
+    }
+}
+
+4. Preprocessor
+
+True:
+- X(ok, --) might be a valid macro call, even if ok is not an identifier anywhere in your program and -- is not applied to any value
+    - reason: #define X(ok, --) expands to nothing
+- just like inline functions, LINE and FILE can be used inside a preprocessor macro to access the line and file wherein the macro is defined
+    - reason: #define LOG(msg) std::cout << __FILE__ << ":" << __LINE__ << " " << msg << std::endl;
+
+False:
+- Preprocessor defines are implicitly undefined at the end of the scope in which they're defined
+    - reason: no, they need to be undefined manually
+- If you #include a file, then redefine a macro used in the file, and #include the file again, your translation unit can end up with
+    two different definitions of the macro
+        - reason: no, the final define will be the last one
+
+5. C++ True or False
+
+True:
+- iterators to elements in an unordered_map may be invalidated by insertions
+    - however pointers and references to elements are not invalidated
+- a container providing iterators is functionally more flexible than one providing "void visit(auto functor to each elem)" instead
+
+False:
+- the const keyword allows you to guarantee all class invariants, example: mutable data members
+- constexpr always ensures something is evaluated at compile time
+    - A constexpr function must be evaluated at compile-time if the return value is used where a constant expression is required.
+      Otherwise, compile-time evaluation is not guaranteed.
+- the standard requires compilers to ensure lambdas never capture dangling references
+    - no, you can get undefined behavior
+- given a string that contains source code to a function call and arguments, the C++ standard library functions let you evaluate the function call
+    - reason: no, you need to use an external library
+- move semantics only help if a class has data-owning pointer data members
+    - reason: no, for example std::string, std::vector, and non-copyable classes, or you don't want your class to be copyable
+
+6. Specified?
+
+- implementation-defined behavior: behavior, for a well-formed program construct and correct data,
+    that depends on the implementation and that each implementation documents
+
+- unspecified behavior: behavior, for a well-formed program construct and correct data, that depends on the implementation,
+    not required to be documented
+
+- undefined behavior: behavior for which this document imposes no requirements
+
+Basically need to obey the string aliasing rules.
+
+Whenever an attempt is made to read or modify the stored value of an object of type DynamicType through a glvalue of type AliasedType,
+the behavior is undefined unless one of the following is true:
+- AliasedType and DynamicType are similar.
+- AliasedType is the (possibly cv-qualified) signed or unsigned variant of DynamicType.
+- AliasedType is std::byte,(since C++17) char, or unsigned char: this permits examination of the object representation of any object as an array of bytes.
+This rule enables type-based alias analysis,
+in which a compiler assumes that the value read through a glvalue of one type is not modified by a write to a glvalue of a different type (subject to the exceptions noted above).
+Note that many C++ compilers relax this rule, as a non-standard language extension, to allow wrong-type access through the inactive member of a union (such access is not undefined in C).
+This is still Undefined behavior, but may be an implementation-defined/unspecified behavior (gcc allows union trick for type punning).
+
+
+Undefined/unspecified behaviors:
+double d{1.0};
+*reinterpret_cast<int*>(&d);
+Reason: they are not similar types
+
+auto f(int n) { auto result = 1234/(n + 1); return -result; }
+Reason: division by zero
+
+Defined behaviors:
+void f(int& n) {
+    *reinterpret_cast<unsigned*>(&n) /= 2;
+}
+Reason: they only differ in the signedness
+
+
+7. untrusted TCP client
+
+
+
+
+Others:
+How to make a custom class work with unordered_map:
+struct Custom {
+    int a;
+    int b;
+    bool operator==(const Custom& other) const {
+        return a == other.a && b == other.b;
+    }
+};
+
+template<>
+struct std::hash<Custom> {
+    size_t operator()(const Custom& custom) const {
+        return std::hash<int>()(custom.a) ^ std::hash<int>()(custom.b);
+    }
+};
