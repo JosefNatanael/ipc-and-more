@@ -158,8 +158,24 @@ void f(int& n) {
 }
 Reason: they only differ in the signedness
 
+7. Hashing
 
-7. untrusted TCP client
+load factor = number of elements in the hash table / total number of buckets (typically around 0.7)
+lower => less collisions
+higher => more collisions
+
+When hashing data that has not been deliberately engineered to create collisions,
+using a cryptographic strength hash function instead of you standard library hash function when:
+- you don't know anything about the keys
+
+not when:
+- the keys are randomly generated
+- the keys tend to be incrementing integers with small gaps sometimes
+- the keys are properly aligned double*, your std::hash uses an identity hash and your unordered_map uses prime number bucket counts
+- the load factor is low
+
+
+8. untrusted TCP client
 
 
 
